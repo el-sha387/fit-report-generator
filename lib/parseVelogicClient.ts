@@ -74,13 +74,26 @@ export async function parseVelogicClient(file: File): Promise<VelogicData> {
   let date = "";
   let sport = "";
 
-  // Find rider name (usually first non-empty line before "Road"/"MTB" etc)
-  for (const line of lines) {
-    if (!riderName && line.length > 2 && !line.match(/^(Velogic|Fit Report|COMPARISON|BIOMECHANICAL)/i)) {
-      riderName = line;
+  // Velogic header contains structured fields — extract by label
+  const headerText = lines.slice(0, 10).join(" ");
+
+  const nameMatch = headerText.match(/Rider\s+name\s+([A-Za-z][A-Za-z\s\-]{0,30?}?)(?:\s+Rider|\s+Position|\s+Date|\s+Powered)/i);
+  if (nameMatch) riderName = nameMatch[1].trim();
+
+  const dateMatch = fullText.match(/(\d{4}-\d{2}-\d{2})/);
+  if (dateMatch) date = dateMatch[1];
+
+  const sportMatch = headerText.match(/sport\s+(Road|MTB|TT|Triathlon|Gravel|E-Bike|Cyclocross)/i);
+  if (sportMatch) sport = sportMatch[1];
+
+  // Fallback: scan lines for a short name-like string
+  if (!riderName) {
+    for (const line of lines) {
+      if (line.length >= 2 && line.length <= 40 && !line.match(/^(Velogic|Fit|COMPARISON|BIOMECHANICAL|Road|MTB|Initial|Final|Change|\d)/i)) {
+        riderName = line;
+        break;
+      }
     }
-    if (line.match(/^\d{4}-\d{2}-\d{2}/)) date = line.split(/\s+/)[0];
-    if (line.match(/^(Road|MTB|TT|Triathlon|Gravel)$/i)) sport = line;
   }
 
   // Find the metrics table — look for "Initial Final Change" header

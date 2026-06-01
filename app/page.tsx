@@ -86,33 +86,26 @@ export default function Home() {
       }
       const dataPagesBytes = new Uint8Array(await res.arrayBuffer());
 
-      // 3. Merge client-side: V7 pages + data pages (no server upload needed)
+      // 3. Merge client-side: insert V7 pages INTO the server doc (preserves fonts)
       setState("merging");
       const { PDFDocument } = await import("pdf-lib");
       const v7Bytes = new Uint8Array(await v7File.arrayBuffer());
 
-      const mergedDoc = await PDFDocument.create();
-
-      // Load both PDFs
-      const dataDoc = await PDFDocument.load(dataPagesBytes);
+      // Use server doc as base — fonts are already embedded correctly
+      const mergedDoc = await PDFDocument.load(dataPagesBytes);
       const v7Doc = await PDFDocument.load(v7Bytes);
 
-      // Page order: cover (data page 0) → V7 pages 1..end → biomechanical data pages (data pages 1..end)
-      const coverPages = await mergedDoc.copyPages(dataDoc, [0]);
-      mergedDoc.addPage(coverPages[0]);
-
+      // Take up to 5 content pages from V7 (skip its cover page at index 0)
       const v7PageCount = v7Doc.getPageCount();
-      const v7PageIdxs = Array.from({ length: Math.min(v7PageCount - 1, 5) }, (_, i) => i + 1);
+      const v7PageIdxs = Array.from(
+        { length: Math.min(v7PageCount - 1, 5) },
+        (_, i) => i + 1
+      );
+
       if (v7PageIdxs.length > 0) {
         const v7Copied = await mergedDoc.copyPages(v7Doc, v7PageIdxs);
-        v7Copied.forEach((p) => mergedDoc.addPage(p));
-      }
-
-      const dataPageCount = dataDoc.getPageCount();
-      const dataIdxs = Array.from({ length: dataPageCount - 1 }, (_, i) => i + 1);
-      if (dataIdxs.length > 0) {
-        const dataCopied = await mergedDoc.copyPages(dataDoc, dataIdxs);
-        dataCopied.forEach((p) => mergedDoc.addPage(p));
+        // Insert V7 pages after cover (position 1), before the data pages
+        v7Copied.reverse().forEach((p) => mergedDoc.insertPage(1, p));
       }
 
       const mergedBytes = await mergedDoc.save();
