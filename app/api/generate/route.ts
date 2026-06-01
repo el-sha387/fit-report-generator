@@ -22,7 +22,8 @@ export async function POST(req: NextRequest) {
       },
     });
   } catch (err) {
-    console.error("Report generation error:", err);
-    return NextResponse.json({ error: "Fehler bei der Report-Erstellung." }, { status: 500 });
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("Report generation error:", msg);
+    return NextResponse.json({ error: `Report-Fehler: ${msg}` }, { status: 500 });
   }
 }
