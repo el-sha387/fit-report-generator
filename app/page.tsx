@@ -90,8 +90,14 @@ export default function Home() {
 
       const res = await fetch("/api/generate", { method: "POST", body: form });
       if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || "Unbekannter Fehler");
+        let errMsg = `Server-Fehler (${res.status})`;
+        try {
+          const data = await res.json();
+          errMsg = data.error || errMsg;
+        } catch {
+          errMsg = `Server-Fehler (${res.status}) – kein JSON zurückgegeben`;
+        }
+        throw new Error(errMsg);
       }
 
       const blob = await res.blob();
