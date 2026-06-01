@@ -3,7 +3,7 @@
 import { useState, useRef } from "react";
 import { parseVelogicClient } from "@/lib/parseVelogicClient";
 
-type UploadState = "idle" | "parsing" | "generating" | "success" | "error";
+type UploadState = "idle" | "parsing" | "generating" | "merging" | "success" | "error";
 
 interface FileInfo { name: string; size: string; }
 
@@ -12,28 +12,19 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function FileDropZone({
-  label, hint, file, onFile, disabled,
-}: {
+function FileDropZone({ label, hint, file, onFile, disabled }: {
   label: string; hint: string; file: FileInfo | null;
   onFile: (f: File) => void; disabled: boolean;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
 
-  function handleDrop(e: React.DragEvent) {
-    e.preventDefault();
-    setDragging(false);
-    const f = e.dataTransfer.files[0];
-    if (f && f.type === "application/pdf") onFile(f);
-  }
-
   return (
     <div
       onClick={() => !disabled && inputRef.current?.click()}
       onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
       onDragLeave={() => setDragging(false)}
-      onDrop={handleDrop}
+      onDrop={(e) => { e.preventDefault(); setDragging(false); const f = e.dataTransfer.files[0]; if (f?.type === "application/pdf") onFile(f); }}
       className={`relative border-2 rounded-xl p-6 cursor-pointer transition-all
         ${disabled ? "opacity-50 cursor-not-allowed" : "hover:border-blue-500 hover:bg-blue-50"}
         ${dragging ? "border-blue-500 bg-blue-50" : file ? "border-green-500 bg-green-50" : "border-dashed border-gray-300 bg-gray-50"}`}
@@ -41,17 +32,13 @@ function FileDropZone({
       <input ref={inputRef} type="file" accept="application/pdf" className="hidden"
         disabled={disabled} onChange={(e) => { const f = e.target.files?.[0]; if (f) onFile(f); }} />
       <div className="flex items-start gap-4">
-        <div className={`text-3xl mt-1 ${file ? "text-green-500" : "text-gray-400"}`}>
-          {file ? "✓" : "📄"}
-        </div>
+        <div className={`text-3xl mt-1 ${file ? "text-green-500" : "text-gray-400"}`}>{file ? "✓" : "📄"}</div>
         <div className="flex-1 min-w-0">
           <p className="font-semibold text-gray-800">{label}</p>
           <p className="text-sm text-gray-500 mt-0.5">{hint}</p>
-          {file ? (
-            <p className="text-sm text-green-700 font-medium mt-2 truncate">{file.name} · {file.size}</p>
-          ) : (
-            <p className="text-xs text-gray-400 mt-2">PDF hierher ziehen oder klicken</p>
-          )}
+          {file
+            ? <p className="text-sm text-green-700 font-medium mt-2 truncate">{file.name} · {file.size}</p>
+            : <p className="text-xs text-gray-400 mt-2">PDF hierher ziehen oder klicken</p>}
         </div>
       </div>
     </div>
@@ -61,8 +48,9 @@ function FileDropZone({
 const STATUS_LABELS: Record<UploadState, string> = {
   idle: "Unified Report generieren",
   parsing: "Velogic-Daten werden extrahiert …",
-  generating: "Report wird erstellt …",
-  success: "Unified Report generieren",
+  generating: "Daten-Seiten werden erstellt …",
+  merging: "PDFs werden zusammengeführt …",
+  success: "Erneut generieren",
   error: "Erneut versuchen",
 };
 
@@ -73,40 +61,71 @@ export default function Home() {
   const [errorMsg, setErrorMsg] = useState("");
 
   const ready = velogicFile && v7File;
-  const isLoading = state === "parsing" || state === "generating";
+  const isLoading = ["parsing", "generating", "merging"].includes(state);
 
   async function handleGenerate() {
     if (!velogicFile || !v7File) return;
     setErrorMsg("");
 
     try {
+      // 1. Parse Velogic PDF in browser (pdfjs)
       setState("parsing");
       const velogicData = await parseVelogicClient(velogicFile);
 
+      // 2. Send only JSON to server → get back cover + data pages PDF
       setState("generating");
-      const form = new FormData();
-      form.append("velogicData", JSON.stringify(velogicData));
-      form.append("v7", v7File);
-
-      const res = await fetch("/api/generate", { method: "POST", body: form });
+      const res = await fetch("/api/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(velogicData),
+      });
       if (!res.ok) {
         let errMsg = `Server-Fehler (${res.status})`;
-        try {
-          const data = await res.json();
-          errMsg = data.error || errMsg;
-        } catch {
-          errMsg = `Server-Fehler (${res.status}) – kein JSON zurückgegeben`;
-        }
+        try { const d = await res.json(); errMsg = d.error || errMsg; } catch { /* html response */ }
         throw new Error(errMsg);
       }
+      const dataPagesBytes = new Uint8Array(await res.arrayBuffer());
 
-      const blob = await res.blob();
+      // 3. Merge client-side: V7 pages + data pages (no server upload needed)
+      setState("merging");
+      const { PDFDocument } = await import("pdf-lib");
+      const v7Bytes = new Uint8Array(await v7File.arrayBuffer());
+
+      const mergedDoc = await PDFDocument.create();
+
+      // Load both PDFs
+      const dataDoc = await PDFDocument.load(dataPagesBytes);
+      const v7Doc = await PDFDocument.load(v7Bytes);
+
+      // Page order: cover (data page 0) → V7 pages 1..end → biomechanical data pages (data pages 1..end)
+      const coverPages = await mergedDoc.copyPages(dataDoc, [0]);
+      mergedDoc.addPage(coverPages[0]);
+
+      const v7PageCount = v7Doc.getPageCount();
+      const v7PageIdxs = Array.from({ length: Math.min(v7PageCount - 1, 5) }, (_, i) => i + 1);
+      if (v7PageIdxs.length > 0) {
+        const v7Copied = await mergedDoc.copyPages(v7Doc, v7PageIdxs);
+        v7Copied.forEach((p) => mergedDoc.addPage(p));
+      }
+
+      const dataPageCount = dataDoc.getPageCount();
+      const dataIdxs = Array.from({ length: dataPageCount - 1 }, (_, i) => i + 1);
+      if (dataIdxs.length > 0) {
+        const dataCopied = await mergedDoc.copyPages(dataDoc, dataIdxs);
+        dataCopied.forEach((p) => mergedDoc.addPage(p));
+      }
+
+      const mergedBytes = await mergedDoc.save();
+
+      // 4. Download
+      const blob = new Blob([mergedBytes.buffer as ArrayBuffer], { type: "application/pdf" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
       a.download = `gebioMized_FitReport_${velogicData.riderName || "Report"}.pdf`;
       a.click();
       URL.revokeObjectURL(url);
+
       setState("success");
     } catch (e: unknown) {
       setErrorMsg(e instanceof Error ? e.message : "Unbekannter Fehler");
@@ -137,24 +156,19 @@ export default function Home() {
             label="Velogicfit Studio Report"
             hint="Enthält biomechanische Winkelwerte (Knie, Hüfte, Schulter …)"
             file={velogicFile ? { name: velogicFile.name, size: formatSize(velogicFile.size) } : null}
-            onFile={setVelogicFile}
-            disabled={isLoading}
+            onFile={setVelogicFile} disabled={isLoading}
           />
           <FileDropZone
             label="gebioMized V7 Report"
             hint="Enthält Satteldruckkarte, Video-Fotos und Positionsdiagramm"
             file={v7File ? { name: v7File.name, size: formatSize(v7File.size) } : null}
-            onFile={setV7File}
-            disabled={isLoading}
+            onFile={setV7File} disabled={isLoading}
           />
         </div>
 
-        <button
-          onClick={handleGenerate}
-          disabled={!ready || isLoading}
+        <button onClick={handleGenerate} disabled={!ready || isLoading}
           className={`w-full py-4 rounded-xl font-semibold text-white text-lg transition-all shadow-sm
-            ${ready && !isLoading ? "bg-[#005A9C] hover:bg-[#004880] cursor-pointer" : "bg-gray-300 cursor-not-allowed text-gray-500"}`}
-        >
+            ${ready && !isLoading ? "bg-[#005A9C] hover:bg-[#004880] cursor-pointer" : "bg-gray-300 cursor-not-allowed text-gray-500"}`}>
           {isLoading ? (
             <span className="flex items-center justify-center gap-2">
               <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24" fill="none">

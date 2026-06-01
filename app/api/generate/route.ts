@@ -1,30 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
-import { generateUnifiedReport } from "@/lib/generateReport";
+import { generateDataPages } from "@/lib/generateReport";
 import type { VelogicData } from "@/lib/parseVelogic";
 
 export const maxDuration = 60;
 
 export async function POST(req: NextRequest) {
   try {
-    const formData = await req.formData();
-    const velogicJson = formData.get("velogicData") as string | null;
-    const v7File = formData.get("v7") as File | null;
+    const body = await req.json();
+    const velogicData: VelogicData = body;
 
-    if (!velogicJson || !v7File) {
-      return NextResponse.json({ error: "Velogic-Daten und V7-PDF werden benötigt." }, { status: 400 });
+    if (!velogicData?.riderName) {
+      return NextResponse.json({ error: "Keine gültigen Velogic-Daten erhalten." }, { status: 400 });
     }
 
-    const velogicData: VelogicData = JSON.parse(velogicJson);
-    const v7Buffer = new Uint8Array(await v7File.arrayBuffer());
+    const pdfBytes = await generateDataPages(velogicData);
 
-    const reportBytes = await generateUnifiedReport(velogicData, v7Buffer);
-
-    const safeName = (velogicData.riderName || "Report").replace(/[^a-zA-Z0-9_\-]/g, "_");
-    return new NextResponse(Buffer.from(reportBytes), {
+    return new NextResponse(Buffer.from(pdfBytes), {
       status: 200,
       headers: {
         "Content-Type": "application/pdf",
-        "Content-Disposition": `attachment; filename="gebioMized_FitReport_${safeName}.pdf"`,
       },
     });
   } catch (err) {
