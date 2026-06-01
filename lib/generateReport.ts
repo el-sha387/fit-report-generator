@@ -1,6 +1,11 @@
 import { PDFDocument, rgb, StandardFonts, PDFPage, PDFFont } from "pdf-lib";
 import type { VelogicData, FitMetric } from "./parseVelogic";
 
+/** Strip characters WinAnsi (Windows-1252) cannot encode */
+function s(text: string): string {
+  return (text ?? "").replace(/[^\x00-\xFF]/g, "").trim() || "—";
+}
+
 // gebioMized brand colors
 const BRAND_BLUE = rgb(0.0, 0.349, 0.612);
 const BRAND_DARK = rgb(0.133, 0.133, 0.133);
@@ -19,7 +24,7 @@ function drawHeader(page: PDFPage, bold: PDFFont, regular: PDFFont, riderName: s
   page.drawRectangle({ x: 0, y: PAGE_H - 50, width: PAGE_W, height: 50, color: BRAND_BLUE });
   page.drawText("gebioMized", { x: MARGIN, y: PAGE_H - 33, size: 16, font: bold, color: WHITE });
   page.drawText("FIT REPORT", { x: MARGIN + 108, y: PAGE_H - 33, size: 16, font: regular, color: WHITE });
-  page.drawText(`${riderName}  |  ${sport}  |  ${date}`, { x: PAGE_W - MARGIN - 200, y: PAGE_H - 33, size: 8, font: regular, color: WHITE });
+  page.drawText(`${s(riderName)}  |  ${s(sport)}  |  ${s(date)}`, { x: PAGE_W - MARGIN - 200, y: PAGE_H - 33, size: 8, font: regular, color: WHITE });
   page.drawText(`${pageNum}`, { x: PAGE_W - MARGIN, y: PAGE_H - 33, size: 8, font: regular, color: WHITE });
 }
 
@@ -53,10 +58,10 @@ function drawMetricsTable(page: PDFPage, bold: PDFFont, regular: PDFFont, metric
   metrics.forEach((m, idx) => {
     const bg = idx % 2 === 0 ? WHITE : LIGHT_GRAY;
     page.drawRectangle({ x: MARGIN, y: y - 2, width: CONTENT_W, height: ROW_H, color: bg });
-    page.drawText(m.label, { x: COL_LABEL + 4, y: y + 3, size: 8, font: regular, color: BRAND_DARK });
-    page.drawText(m.initial ? `${m.initial}${unit}` : "—", { x: COL_INIT, y: y + 3, size: 8, font: regular, color: BRAND_DARK });
-    page.drawText(m.final ? `${m.final}${unit}` : "—", { x: COL_FINAL, y: y + 3, size: 8, font: regular, color: BRAND_DARK });
-    const change = m.change || "=";
+    page.drawText(s(m.label), { x: COL_LABEL + 4, y: y + 3, size: 8, font: regular, color: BRAND_DARK });
+    page.drawText(s(m.initial ? `${m.initial}${unit}` : "—"), { x: COL_INIT, y: y + 3, size: 8, font: regular, color: BRAND_DARK });
+    page.drawText(s(m.final ? `${m.final}${unit}` : "—"), { x: COL_FINAL, y: y + 3, size: 8, font: regular, color: BRAND_DARK });
+    const change = s(m.change || "=");
     const changeColor = change.startsWith("+") ? GREEN : change.startsWith("-") ? RED : MID_GRAY;
     page.drawText(change, { x: COL_CHANGE, y: y + 3, size: 8, font: bold, color: changeColor });
     y -= ROW_H;
@@ -80,8 +85,8 @@ export async function generateDataPages(velogicData: VelogicData): Promise<Uint8
   cover.drawRectangle({ x: 0, y: PAGE_H - 160, width: PAGE_W, height: 160, color: BRAND_BLUE });
   cover.drawText("gebioMized", { x: MARGIN, y: PAGE_H - 70, size: 36, font: bold, color: WHITE });
   cover.drawText("FIT REPORT", { x: MARGIN, y: PAGE_H - 105, size: 28, font: regular, color: WHITE });
-  cover.drawText(riderName || "Rider", { x: MARGIN, y: PAGE_H - 200, size: 22, font: bold, color: BRAND_DARK });
-  cover.drawText(`${sport || "Bike Fit"}  |  ${date || ""}`, { x: MARGIN, y: PAGE_H - 225, size: 12, font: regular, color: MID_GRAY });
+  cover.drawText(s(riderName || "Rider"), { x: MARGIN, y: PAGE_H - 200, size: 22, font: bold, color: BRAND_DARK });
+  cover.drawText(`${s(sport || "Bike Fit")}  |  ${s(date || "")}`, { x: MARGIN, y: PAGE_H - 225, size: 12, font: regular, color: MID_GRAY });
   cover.drawLine({ start: { x: MARGIN, y: PAGE_H - 240 }, end: { x: PAGE_W - MARGIN, y: PAGE_H - 240 }, thickness: 1, color: BRAND_BLUE });
 
   const introLines = [
@@ -93,7 +98,7 @@ export async function generateDataPages(velogicData: VelogicData): Promise<Uint8
   ];
   let iy = PAGE_H - 270;
   for (const line of introLines) {
-    cover.drawText(line, { x: MARGIN, y: iy, size: 10, font: regular, color: BRAND_DARK });
+    cover.drawText(s(line), { x: MARGIN, y: iy, size: 10, font: regular, color: BRAND_DARK });
     iy -= 16;
   }
 
@@ -109,7 +114,7 @@ export async function generateDataPages(velogicData: VelogicData): Promise<Uint8
   let sy = iy - 38;
   for (const item of scope) {
     cover.drawText("•", { x: MARGIN, y: sy, size: 9, font: bold, color: BRAND_BLUE });
-    cover.drawText(item, { x: MARGIN + 14, y: sy, size: 9, font: regular, color: BRAND_DARK });
+    cover.drawText(s(item), { x: MARGIN + 14, y: sy, size: 9, font: regular, color: BRAND_DARK });
     sy -= 16;
   }
   drawFooter(cover, regular);
@@ -126,7 +131,7 @@ export async function generateDataPages(velogicData: VelogicData): Promise<Uint8
   if (velogicData.jointAngles.length > 0) {
     bioPage.drawText("Gelenkwinkel", { x: MARGIN, y, size: 8, font: bold, color: BRAND_DARK });
     y -= 6;
-    y = drawMetricsTable(bioPage, bold, regular, velogicData.jointAngles, y);
+    y = drawMetricsTable(bioPage, bold, regular, velogicData.jointAngles, y, "°");
   }
   if (velogicData.jointMotion.length > 0) {
     y -= 8;
